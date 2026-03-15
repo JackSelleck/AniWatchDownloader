@@ -397,6 +397,9 @@ class AniWatchExtractor:
                 server_names.append(option.text)
                 print(f"{Fore.LIGHTRED_EX} {i + 1}: {Fore.LIGHTCYAN_EX}{option.text}")
 
+            self.driver.requests.clear()
+            self.driver.quit()
+
             selection = server_names[
                 get_int_in_range(
                     f"\n{Fore.LIGHTCYAN_EX}Server:{Fore.LIGHTYELLOW_EX} ",
@@ -405,8 +408,16 @@ class AniWatchExtractor:
                 )
                 - 1
             ]
-            
+        else:
+            self.driver.requests.clear()
+            self.driver.quit()
+
         print(f"\n{Fore.LIGHTGREEN_EX}You chose: {Fore.LIGHTCYAN_EX}{selection}")
+
+        self.configure_driver()
+        self.driver.get(anime.url)
+
+        options = self.get_server_options(anime.download_type)
 
         for option in options:
             if option.text == selection:
