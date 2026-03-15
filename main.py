@@ -6,7 +6,6 @@ from colorama import Fore
 
 from extractors.general import GeneralExtractor
 from extractors.aniwatch import AniWatchExtractor
-from extractors.instagram import InstagramExtractor
 
 ANIWATCH_DOMAINS = ("hianime", "aniwatchtv", "aniwatch")
 
@@ -32,8 +31,6 @@ class Main:
 
         if "aniwatch" in self.args.link:
             return AniWatchExtractor(args=self.args)
-        if "instagram.com" in self.args.link:
-            return InstagramExtractor(args=self.args)
         return GeneralExtractor(args=self.args)
 
     def parse_args(self):

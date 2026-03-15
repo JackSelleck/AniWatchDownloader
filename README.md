@@ -1,6 +1,6 @@
 # GDownloader
 
-A simple CLI tool for downloading content from the streaming platform [aniwatch.to](aniwatch.to) + [social media platfroms](#supported-platforms). \
+A simple CLI tool for downloading content from the streaming platform aniwatch.to.
 This tool works best if you have a VPN installed with Adblock support, as I have not been able to get a working ad
 blocker working with the chrome session.
 
@@ -34,11 +34,13 @@ blocker working with the chrome session.
      ```
 
 4. You are now ready to run the program with the following command.
+
    - Windows
 
      ```bash
       python main.py
      ```
+    Alternatively you can use the Startup.bat file.
 
    - Linux/MacOS
 
@@ -67,10 +69,6 @@ blocker working with the chrome session.
 - **Note** if a redirect ad to a second tab is created, close the second tab manually and refresh the original site to
   continue download. (This will hopefully be patched eventually)
 
-### Downloading from other platforms
-
-- Depending on the platform ([view list of supported platforms](#supported-platforms)) you will either be prompted to select a file name or it will be automatically chosen for you
-
 ## Options
 
 You are able to pass parameters when running the file to add additional options.
@@ -94,14 +92,6 @@ You are able to pass parameters when running the file to add additional options.
 ### Usage Example
 
 ```bash
-python3 main.py -o ~/Desktop/ --server "HD-1" -n "Solo Leveling" --no-subtitles
+python3 main.py -o ~/Desktop/ --server "HD-1" -n "Dragon Ball" --no-subtitles
 
 ```
-
-## Supported Platforms
-
-Here is a current list of tested platforms
-
-- TikTok
-- Youtube (long form videos/shorts)
-- Instagram (reels/images)
