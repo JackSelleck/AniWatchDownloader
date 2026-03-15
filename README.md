@@ -1,6 +1,6 @@
-Forked from Gavin Heatheringtons HiAnimeDownloader, HiAnime is no longer up so ive edited his scripts to use on AniWatch instead
+Forked from Gavin Heatheringtons HiAnimeDownloader, HiAnime is no longer up so ive edited his scripts to use on AniWatch instead; note that I have never used python and dont know how yt-dlp works so you may encounter issues, though some animes just have badly configured .vtt files which are not really the fault of the tool.
 
-Below is the original ReadMe file, besides replacing HiAnime for AniWatch and removing mention of other platforms.
+Below is the ReadMe file which I have mostly kept the same from HiAnimeDownloader.
 
 # GDownloader
 
@@ -90,7 +90,7 @@ You are able to pass parameters when running the file to add additional options.
 
 - `--no-subtitles` downloads the content without looking for subtitle files
 
-- `--server` allows you to select the streaming server you would like to downlaod from.
+- `--server` allows you to select the streaming server you would like to download from.
 
 - `--aria` uses the aria2c downloader for yt-dlp to download the content (untested)
 
