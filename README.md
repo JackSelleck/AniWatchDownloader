@@ -1,6 +1,11 @@
+Forked from Gavin Heatheringtons HiAnimeDownloader, HiAnime is no longer up so ive edited his scripts to use on AniWatch instead
+
+-- Below is the original ReadMe file, besides replacing HiAnime for AniWatch and removing mention of other platforms. --
+
 # GDownloader
 
 A simple CLI tool for downloading content from the streaming platform aniwatch.to.
+
 This tool works best if you have a VPN installed with Adblock support, as I have not been able to get a working ad
 blocker working with the chrome session.
 
