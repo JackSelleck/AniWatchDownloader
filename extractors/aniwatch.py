@@ -6,7 +6,7 @@ from argparse import Namespace
 from dataclasses import asdict, dataclass
 from glob import glob
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -34,7 +34,7 @@ class Anime:
     season_number: int = -1
 
 
-class HianimeExtractor:
+class AniWatchExtractor:
     def __init__(self, args: Namespace, name: str | None = None) -> None:
         self.args: Namespace = args
 
@@ -49,7 +49,7 @@ class HianimeExtractor:
             "Accept-Language": "en-US,en;q=0.8",
             "Connection": "keep-alive",
         }
-        self.URL: str = "https://hianime.to"
+        self.URL: str = "https://aniwatchtv.to"
         self.ENCODING = "utf-8"
         self.SUBTITLE_LANG: str = "en"
         self.OTHER_LANGS: list[str] = [
@@ -95,8 +95,8 @@ class HianimeExtractor:
             "slo",
             "ukr",
         ]
-        self.DOWNLOAD_ATTEMPT_CAP: int = 45
-        self.DOWNLOAD_REFRESH: tuple[int, int] = (15, 30)
+        self.DOWNLOAD_ATTEMPT_CAP: int = 100
+        self.DOWNLOAD_REFRESH: tuple[int, int, int, int] = (15, 30, 45, 75)
         self.BAD_TITLE_CHARS: list[str] = [
             "-",
             ".",
@@ -285,7 +285,7 @@ class HianimeExtractor:
         print(
             f"{Fore.LIGHTRED_EX}Invalid response, please respond with either 'sub' or 'dub'."
         )
-        return HianimeExtractor.get_download_type()
+        return AniWatchExtractor.get_download_type()
 
     def configure_driver(self) -> None:
         mobile_emulation: dict[str, str] = {"deviceName": "iPhone X"}
@@ -591,18 +591,13 @@ class HianimeExtractor:
 
     def get_anime(self, name: str | None = None) -> Anime | None:
         os.system("cls" if os.name == "nt" else "clear")
-        print(Fore.LIGHTGREEN_EX + "\nHiAnime " + Fore.LIGHTWHITE_EX + "GDown\n")
+        print(Fore.LIGHTGREEN_EX + "\nAniWatch " + Fore.LIGHTWHITE_EX + "GDown\n")
 
         search_name: str = name if name else input("Enter Name of Anime: ")
 
         # GET ANIME ELEMENTS FROM PAGE
         url: str = urljoin(self.URL, "/search?keyword=" + search_name)
-        search_page_response: requests.Response = requests.get(
-            url, headers=self.HEADERS
-        )
-        search_page_soup: BeautifulSoup = BeautifulSoup(
-            search_page_response.content, "html.parser"
-        )
+        search_page_soup: BeautifulSoup = self._fetch_soup(url)
 
         main_content: Tag = search_page_soup.find("div", id="main-content")  # type: ignore
         anime_elements: list[Tag] = main_content.find_all("div", class_="flw-item")  # type: ignore
@@ -616,10 +611,10 @@ class HianimeExtractor:
         for i, element in enumerate(anime_elements, 1):
             raw_name: str = element.find("h3", class_="film-name").text  # type: ignore
             name_of_anime: str = raw_name.translate(self.TITLE_TRANS)
-            url_of_anime: str = urljoin(
-                self.URL,
-                str(element.find("a", class_="film-poster-ahref item-qtip")["href"]),  # type: ignore
-            )
+            raw_href: str = str(element.find("a", class_="film-poster-ahref item-qtip")["href"])  # type: ignore
+            from urllib.parse import urlparse
+            href_path = urlparse(raw_href).path.strip("/")
+            url_of_anime: str = urljoin(self.URL, f"/watch/{href_path}")
 
             try:
                 # Some anime has no subs
@@ -679,29 +674,53 @@ class HianimeExtractor:
         ]
 
     def get_anime_from_link(self, link: str) -> Anime:
-        link_page: requests.Response = requests.get(link, headers=self.HEADERS)
-        link_page_soup = BeautifulSoup(link_page.content, "html.parser")
-        main_div: Tag = link_page_soup.find("div", "anisc-detail")  # type: ignore
+        from urllib.parse import urlparse
+    
+        parsed = urlparse(link)
+        path = parsed.path.rstrip("/") 
+    
+        if path.startswith("/watch/"):
+            anime_slug = path[len("/watch/"):]
+        else:
+            anime_slug = path.lstrip("/")
+    
+        detail_url = urljoin(self.URL, f"/{anime_slug}")
+        watch_url  = urljoin(self.URL, f"/watch/{anime_slug}")
+    
+        page_soup = self._fetch_soup(detail_url)
+        main_div: Tag | None = page_soup.find("div", "anisc-detail")  # type: ignore
+    
+        if not main_div:
+            print(f"{Fore.LIGHTYELLOW_EX}Detail page parse failed, trying watch page...")
+            page_soup = self._fetch_soup(watch_url)
+            main_div = page_soup.find("div", "anisc-detail")  # type: ignore
+    
+        if not main_div:
+            raise ValueError(
+                f"Could not find anime details for slug '{anime_slug}'. "
+                f"Tried: {detail_url} and {watch_url}"
+            )
+    
         anime_stats: Tag = main_div.find("div", "film-stats")  # type: ignore
-
+    
         try:
-            # Some anime has no subs
-            sub_episodes_available: int = int(
+            sub_eps: int = int(
                 anime_stats.find("div", class_="tick-item tick-sub").text  # type: ignore
             )
-        except AttributeError:
-            sub_episodes_available: int = 0
+        except (AttributeError, ValueError):
+            sub_eps = 0
+    
         try:
-            dub_episodes_available: int = int(
+            dub_eps: int = int(
                 anime_stats.find("div", class_="tick-item tick-dub").text  # type: ignore
             )
-        except AttributeError:
-            dub_episodes_available: int = 0
-
+        except (AttributeError, ValueError):
+            dub_eps = 0
+    
         a_tag: Tag = main_div.find("h2", "film-name").find("a")  # type: ignore
-        return Anime(
-            str(a_tag.text).translate(self.TITLE_TRANS),
-            urljoin(self.URL, "/watch" + str(a_tag["href"])),
-            sub_episodes_available,
-            dub_episodes_available,
-        )
+        name = str(a_tag.text).translate(self.TITLE_TRANS)
+        return Anime(name, watch_url, sub_eps, dub_eps)
+    
+    def _fetch_soup(self, url: str) -> BeautifulSoup:
+        response = requests.get(url, headers=self.HEADERS)
+        return BeautifulSoup(response.content, "html.parser")

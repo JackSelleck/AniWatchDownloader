@@ -1,6 +1,6 @@
 # GDownloader
 
-A simple CLI tool for downloading content from the streaming platform [hianime.to](hianime.to) + [social media platfroms](#supported-platforms). \
+A simple CLI tool for downloading content from the streaming platform [aniwatch.to](aniwatch.to) + [social media platfroms](#supported-platforms). \
 This tool works best if you have a VPN installed with Adblock support, as I have not been able to get a working ad
 blocker working with the chrome session.
 
@@ -14,7 +14,7 @@ blocker working with the chrome session.
 1. Download the files from the repository.
 
    ```bash
-   git clone https://github.com/gheatherington/HianimeDownloader
+   git clone https://github.com/JackSelleck/AniWatchDownloader
    ```
 
 2. Navigate into the directory it was downloaded to in your terminal.
@@ -48,19 +48,15 @@ blocker working with the chrome session.
 
 ## Usage
 
-- Update the repository before running (as it is still being worked on)
-
-  ```bash
-  git fetch https://github.com/gheatherington/HianimeDownloader
-  ```
+- Double click the "Startup.bat"
 
 - After running the `main.py` file, enter the name of the anime you would like to search for
-  from [hianime.to](hianime.to) or provide a link to the content you would like to download
+  from [aniwatch.to](aniwatch.to) or provide a link to the content you would like to download
 
-- If you provided a link you will jump to either the [Downloading from HiAnime](#downloading-from-hianime) or [Downloading from Other](#downloading-from-other-platforms)
+- If you provided a link you will jump to either the [Downloading from Aniwatch](#downloading-from-aniwatch) or [Downloading from Other](#downloading-from-other-platforms)
 - If you enter a name of an anime it will bring up a selection of anime options from the site, select the desired one with the corresponding number.
 
-### Downloading From HiAnime
+### Downloading From Aniwatch
 
 - Next you will be prompted to either select which version of the anime you would like; either sub or dub. If only one
   was available, it will be automatically selected for you.
