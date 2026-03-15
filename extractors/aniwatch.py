@@ -53,65 +53,16 @@ class AniWatchExtractor:
         self.ENCODING = "utf-8"
         self.SUBTITLE_LANG: str = "en"
         self.OTHER_LANGS: list[str] = [
-            "ita",
-            "jpn",
-            "pol",
-            "por",
-            "ara",
-            "chi",
-            "cze",
-            "dan",
-            "dut",
-            "fin",
-            "fre",
-            "ger",
-            "gre",
-            "heb",
-            "hun",
-            "ind",
-            "kor",
-            "nob",
-            "pol",
-            "rum",
-            "rus",
-            "tha",
-            "vie",
-            "swe",
-            "spa",
-            "tur",
-            "ces",
-            "bul",
-            "zho",
-            "nld",
-            "fra",
-            "deu",
-            "ell",
-            "hin",
-            "hrv",
-            "msa",
-            "may",
-            "ron",
-            "slk",
-            "slo",
-            "ukr",
+            "ita", "jpn", "pol", "por", "ara", "chi", "cze", "dan", "dut",
+            "fin", "fre", "ger", "gre", "heb", "hun", "ind", "kor", "nob",
+            "pol", "rum", "rus", "tha", "vie", "swe", "spa", "tur", "ces",
+            "bul", "zho", "nld", "fra", "deu", "ell", "hin", "hrv", "msa",
+            "may", "ron", "slk", "slo", "ukr",
         ]
         self.DOWNLOAD_ATTEMPT_CAP: int = 100
         self.DOWNLOAD_REFRESH: tuple[int, int, int, int] = (15, 30, 45, 75)
         self.BAD_TITLE_CHARS: list[str] = [
-            "-",
-            ".",
-            "/",
-            "\\",
-            "?",
-            "%",
-            "*",
-            "<",
-            ">",
-            "|",
-            '"',
-            "[",
-            "]",
-            ":",
+            "-", ".", "/", "\\", "?", "%", "*", "<", ">", "|", '"', "[", "]", ":",
         ]
         self.TITLE_TRANS: dict[int, Any] = str.maketrans(
             "", "", "".join(self.BAD_TITLE_CHARS)
@@ -218,7 +169,8 @@ class AniWatchExtractor:
                 episode.update(media_requests)
                 self.captured_video_urls.append(media_requests["m3u8"])
                 if not self.args.no_subtitles:
-                    self.captured_subtitle_urls.append(media_requests["vtt"])
+                    if "vtt" in media_requests:
+                        self.captured_subtitle_urls.append(media_requests["vtt"])
             except KeyboardInterrupt:
                 print("\n\nCanceling media capture...")
                 if not get_conformation(
@@ -248,21 +200,30 @@ class AniWatchExtractor:
 
         for episode in episodes:
             name = f"{anime.name} - s{anime.season_number:02}e{episode['number']:02} - {episode['title']}"
-            if "m3u8" not in episode.keys() and not episode["m3u8"]:
+
+            if not episode.get("m3u8"):
                 print(f"Skipping {name} (No M3U8 Stream Found)")
                 continue
 
+            variant_url = self.look_for_variants(episode["m3u8"], episode["headers"])
+            if not variant_url:
+                print(f"{Fore.LIGHTRED_EX}Skipping {name} (No variant stream found in master.m3u8)")
+                continue
+
             result = self.yt_dlp_download(
-                self.look_for_variants(episode["m3u8"], episode["headers"]),
+                variant_url,
                 episode["headers"],
                 f"{folder}{name}.mp4",
             )
             if not result:
                 break
 
-            if "vtt" in episode.keys() and episode["vtt"]:
-                self.yt_dlp_download(
-                    episode["vtt"], episode["headers"], f"{folder}{name}.vtt"
+            if "vtt" in episode and episode["vtt"]:
+                self._download_vtt(
+                    episode["vtt"],
+                    episode["headers"],
+                    f"{folder}{name}.vtt",
+                    referer=episode.get("url", self.URL),
                 )
             elif not self.args.no_subtitles:
                 print(f"Skipping {name}.vtt (No VTT Stream Found)")
@@ -278,9 +239,9 @@ class AniWatchExtractor:
             .strip()
             .lower()
         )
-        if ans == "sub" or ans == "s":
+        if ans in ("sub", "s"):
             return "sub"
-        elif ans == "dub" or ans == "d":
+        elif ans in ("dub", "d"):
             return "dub"
         print(
             f"{Fore.LIGHTRED_EX}Invalid response, please respond with either 'sub' or 'dub'."
@@ -347,10 +308,7 @@ class AniWatchExtractor:
                 window.alert = function() {};
                 window.confirm = function() { return true; };
                 window.prompt = function() { return null; };
-                window.open = function() {
-                    console.log("Blocked a popup attempt.");
-                    return null;
-                };
+                window.open = function() { return null; };
             """
         )
 
@@ -360,9 +318,7 @@ class AniWatchExtractor:
         )
 
         options = [
-            _type.find_element(By.CLASS_NAME, "ps__-list").find_elements(
-                By.TAG_NAME, "a"
-            )
+            _type.find_element(By.CLASS_NAME, "ps__-list").find_elements(By.TAG_NAME, "a")
             for _type in self.driver.find_element(
                 By.ID, "servers-content"
             ).find_elements(By.XPATH, "./div[contains(@class, 'ps_-block')]")
@@ -370,7 +326,7 @@ class AniWatchExtractor:
 
         return (
             options[0]
-            if len(options) == 1 or (download_type == "sub" or download_type == "s")
+            if len(options) == 1 or download_type in ("sub", "s")
             else options[1]
         )
 
@@ -438,13 +394,14 @@ class AniWatchExtractor:
             episode_number: int = int(str(link.get("data-number")))
             if start_episode <= episode_number <= end_episode:
                 url = urljoin(self.URL, str(link["href"]))
-                episode_title = link.get("title")
-                episode_info = {
+                # Sanitise title to strip invalid filename characters
+                raw_title = str(link.get("title") or "")
+                episode_title = raw_title.translate(self.TITLE_TRANS)
+                episodes.append({
                     "url": url,
                     "number": int(episode_number),
                     "title": episode_title,
-                }
-                episodes.append(episode_info)
+                })
         return episodes
 
     def capture_media_requests(self) -> dict[str, str] | None:
@@ -452,24 +409,23 @@ class AniWatchExtractor:
         found_vtt: bool = self.args.no_subtitles
         attempt: int = 0
         urls: dict[str, Any] = {"all-vtt": []}
-        previously_found_vtt: int = 0
+        checked_uris: set[str] = set()
 
         all_urls = []
-        while (
-            not found_m3u8 or not found_vtt
-        ) and self.DOWNLOAD_ATTEMPT_CAP >= attempt:
+        while (not found_m3u8 or not found_vtt) and self.DOWNLOAD_ATTEMPT_CAP >= attempt:
             sys.stdout.write(
                 f"\r{Fore.CYAN}Attempt #{attempt} - {self.DOWNLOAD_ATTEMPT_CAP - attempt} Attempts Remaining"
             )
             sys.stdout.flush()
 
-            for request in self.driver.requests:
+            for request in list(self.driver.requests):
                 if not request.response:
                     continue
 
                 uri = request.url.lower()
                 if uri not in all_urls:
                     all_urls.append(uri)
+
                 if (
                     not found_m3u8
                     and uri.endswith(".m3u8")
@@ -480,29 +436,37 @@ class AniWatchExtractor:
                     urls["headers"] = dict(request.headers)
                     found_m3u8 = True
                     continue
+
                 if (
                     not found_vtt
                     and ".vtt" in uri
                     and "thumbnail" not in uri
                     and uri not in self.captured_subtitle_urls
+                    and uri not in checked_uris
                     and not any(lang in uri for lang in self.OTHER_LANGS)
-                    and detect_lang(
-                        requests.get(uri, headers=dict(request.headers)).content.decode(
-                            self.ENCODING
-                        )
-                    )
-                    == self.SUBTITLE_LANG
                 ):
-                    if uri in urls["all-vtt"]:
-                        previously_found_vtt += 1
-                        if previously_found_vtt >= len(urls["all-vtt"]):
-                            found_vtt = True
+                    checked_uris.add(uri)
+                    try:
+                        lang = detect_lang(
+                            requests.get(uri, headers=dict(request.headers), timeout=10)
+                            .content.decode(self.ENCODING)
+                        )
+                    except Exception:
+                        continue
+
+                    if lang != self.SUBTITLE_LANG:
                         continue
 
                     urls["all-vtt"].append(uri)
+                    found_vtt = True  # stop as soon as one valid English VTT is found
+
             attempt += 1
             if attempt in self.DOWNLOAD_REFRESH:
-                self.driver.refresh()
+                try:
+                    self.driver.requests.clear()
+                    self.driver.refresh()
+                except Exception as e:
+                    print(f"\n{Fore.LIGHTYELLOW_EX}Warning: page refresh failed ({e}), continuing...")
             time.sleep(1)
 
         print()
@@ -511,7 +475,8 @@ class AniWatchExtractor:
             return None
         if not found_vtt:
             print(
-                f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not apart of the video file, option '--no-subtitles' can be used to skip downloading subtitles."
+                f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not part of the video file. "
+                f"Option '--no-subtitles' can be used to skip downloading subtitles."
             )
             self.args.no_subtitles = get_conformation(
                 f"\n{Fore.LIGHTCYAN_EX}Would you like to skip the collection of subtiles on the following episodes (y/n): "
@@ -581,13 +546,30 @@ class AniWatchExtractor:
 
         if not _return:
             for file in [
-                f
-                for f in glob(location[:-4] + ".*")
+                f for f in glob(location[:-4] + ".*")
                 if not f.endswith((".mp4", ".vtt"))
             ]:
                 safe_remove(file)
 
         return _return
+
+    def _download_vtt(self, url: str, headers: dict[str, str], location: str, referer: str = "") -> None:
+        vtt_headers = {
+            "User-Agent": self.HEADERS["User-Agent"],
+            "Referer": referer or self.URL,
+            "Origin": self.URL,
+            "Accept": "*/*",
+        }
+        try:
+            response = requests.get(url, headers=vtt_headers, timeout=30)
+            response.raise_for_status()
+            with open(location, "wb") as f:
+                f.write(response.content)
+            print(f"{Fore.LIGHTGREEN_EX}[VTT] Downloaded: {os.path.basename(location)}")
+        except requests.HTTPError as e:
+            print(f"{Fore.LIGHTRED_EX}[VTT] HTTP error downloading subtitle: {e}")
+        except requests.RequestException as e:
+            print(f"{Fore.LIGHTRED_EX}[VTT] Failed to download subtitle: {e}")
 
     def get_anime(self, name: str | None = None) -> Anime | None:
         os.system("cls" if os.name == "nt" else "clear")
@@ -600,67 +582,51 @@ class AniWatchExtractor:
         search_page_soup: BeautifulSoup = self._fetch_soup(url)
 
         main_content: Tag = search_page_soup.find("div", id="main-content")  # type: ignore
+        if not main_content:
+            print("Could not parse search results page")
+            return None
+
         anime_elements: list[Tag] = main_content.find_all("div", class_="flw-item")  # type: ignore
 
         if not anime_elements:
             print("No anime found")
-            return  # Exit if no anime is found
+            return None # Exit if no anime is found
 
         # MAKE DICT WITH ANIME TITLES
         anime_list: list[Anime] = []
-        for i, element in enumerate(anime_elements, 1):
+        for element in anime_elements:
             raw_name: str = element.find("h3", class_="film-name").text  # type: ignore
             name_of_anime: str = raw_name.translate(self.TITLE_TRANS)
+
+            # Search results link to detail page — force /watch/ prefix for Selenium
             raw_href: str = str(element.find("a", class_="film-poster-ahref item-qtip")["href"])  # type: ignore
-            from urllib.parse import urlparse
             href_path = urlparse(raw_href).path.strip("/")
             url_of_anime: str = urljoin(self.URL, f"/watch/{href_path}")
 
             try:
                 # Some anime has no subs
-                sub_episodes_available: int = element.find(
-                    "div", class_="tick-item tick-sub"
-                ).text  # type: ignore
-            except AttributeError:
-                sub_episodes_available: int = 0
+                sub_eps: int = int(element.find("div", class_="tick-item tick-sub").text)  # type: ignore
+            except (AttributeError, ValueError):
+                sub_eps = 0
             try:
-                dub_episodes_available: int = element.find(
-                    "div", class_="tick-item tick-dub"
-                ).text  # type: ignore
-            except AttributeError:
-                dub_episodes_available: int = 0
+                dub_eps: int = int(element.find("div", class_="tick-item tick-dub").text)  # type: ignore
+            except (AttributeError, ValueError):
+                dub_eps = 0
 
-            anime_list.append(
-                Anime(
-                    name_of_anime,
-                    url_of_anime,
-                    int(sub_episodes_available),
-                    int(dub_episodes_available),
-                )
-            )
+            anime_list.append(Anime(name_of_anime, url_of_anime, sub_eps, dub_eps))
 
         # PRINT ANIME TITLES TO THE CONSOLE
         for i, anime in enumerate(anime_list, start=1):
             print(
                 " "
-                + Fore.LIGHTRED_EX
-                + str(i)
-                + ": "
-                + Fore.LIGHTCYAN_EX
-                + anime.name
-                + Fore.WHITE
-                + " | "
-                + "Episodes: "
-                + Fore.LIGHTYELLOW_EX
-                + str(anime.sub_episodes)
-                + Fore.LIGHTWHITE_EX
-                + " sub"
-                + Fore.LIGHTGREEN_EX
-                + " / "
-                + Fore.LIGHTYELLOW_EX
-                + str(anime.dub_episodes)
-                + Fore.LIGHTWHITE_EX
-                + " dub"
+                + Fore.LIGHTRED_EX + str(i) + ": "
+                + Fore.LIGHTCYAN_EX + anime.name
+                + Fore.WHITE + " | Episodes: "
+                + Fore.LIGHTYELLOW_EX + str(anime.sub_episodes)
+                + Fore.LIGHTWHITE_EX + " sub"
+                + Fore.LIGHTGREEN_EX + " / "
+                + Fore.LIGHTYELLOW_EX + str(anime.dub_episodes)
+                + Fore.LIGHTWHITE_EX + " dub"
             )
 
         # USER SELECTS ANIME
@@ -674,52 +640,33 @@ class AniWatchExtractor:
         ]
 
     def get_anime_from_link(self, link: str) -> Anime:
-        from urllib.parse import urlparse
-    
-        parsed = urlparse(link)
-        path = parsed.path.rstrip("/") 
-    
-        if path.startswith("/watch/"):
-            anime_slug = path[len("/watch/"):]
-        else:
-            anime_slug = path.lstrip("/")
-    
-        detail_url = urljoin(self.URL, f"/{anime_slug}")
-        watch_url  = urljoin(self.URL, f"/watch/{anime_slug}")
-    
-        page_soup = self._fetch_soup(detail_url)
-        main_div: Tag | None = page_soup.find("div", "anisc-detail")  # type: ignore
-    
-        if not main_div:
-            print(f"{Fore.LIGHTYELLOW_EX}Detail page parse failed, trying watch page...")
-            page_soup = self._fetch_soup(watch_url)
-            main_div = page_soup.find("div", "anisc-detail")  # type: ignore
-    
-        if not main_div:
-            raise ValueError(
-                f"Could not find anime details for slug '{anime_slug}'. "
-                f"Tried: {detail_url} and {watch_url}"
-            )
-    
+        link_page: requests.Response = requests.get(link, headers=self.HEADERS)
+        link_page_soup = BeautifulSoup(link_page.content, "html.parser")
+        main_div: Tag = link_page_soup.find("div", "anisc-detail")  # type: ignore
         anime_stats: Tag = main_div.find("div", "film-stats")  # type: ignore
-    
+
         try:
             sub_eps: int = int(
                 anime_stats.find("div", class_="tick-item tick-sub").text  # type: ignore
             )
         except (AttributeError, ValueError):
             sub_eps = 0
-    
         try:
             dub_eps: int = int(
                 anime_stats.find("div", class_="tick-item tick-dub").text  # type: ignore
             )
         except (AttributeError, ValueError):
             dub_eps = 0
-    
+
         a_tag: Tag = main_div.find("h2", "film-name").find("a")  # type: ignore
-        name = str(a_tag.text).translate(self.TITLE_TRANS)
-        return Anime(name, watch_url, sub_eps, dub_eps)
+
+        href = urlparse(str(a_tag["href"])).path
+        return Anime(
+            str(a_tag.text).translate(self.TITLE_TRANS),
+            urljoin(self.URL, "/watch" + href),
+            sub_eps,
+            dub_eps,
+        )
     
     def _fetch_soup(self, url: str) -> BeautifulSoup:
         response = requests.get(url, headers=self.HEADERS)

@@ -19,7 +19,7 @@ class Main:
         if not self.args.link and not self.args.filename:
             os.system("cls" if os.name == "nt" else "clear")
             ans = input(
-                f"{Fore.LIGHTGREEN_EX}GDown {Fore.LIGHTCYAN_EX}Downloader\n\nProvide an aniwatch.to episode or series link:\n{Fore.LIGHTYELLOW_EX}"
+                f"{Fore.LIGHTGREEN_EX}GDown {Fore.LIGHTCYAN_EX}Downloader\n\nSearch an anime title or Provide a link to an aniwatch.to episode:\n{Fore.LIGHTYELLOW_EX}"
             )
             if "http" in ans.lower():
                 self.args.link = ans
