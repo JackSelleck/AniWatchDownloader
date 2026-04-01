@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+import tempfile
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from glob import glob
@@ -150,11 +151,8 @@ class AniWatchExtractor:
             title = episode["title"]
 
             print(
-                Fore.LIGHTGREEN_EX
-                + "Getting"
-                + Fore.LIGHTWHITE_EX
-                + f" Episode {number} - {title} from {url}"
-                + Fore.LIGHTWHITE_EX
+                Fore.LIGHTGREEN_EX + "Getting"
+                + Fore.LIGHTWHITE_EX + f" Episode {number} - {title} from {url}"
             )
 
             try:
@@ -163,9 +161,8 @@ class AniWatchExtractor:
                 self.driver.execute_script("window.focus();")
                 media_requests = self.capture_media_requests()
                 if not media_requests:
-                    print("No m3u8 file was found skipping download")
+                    print("No m3u8 file was found, skipping download")
                     continue
-
                 episode.update(media_requests)
                 self.captured_video_urls.append(media_requests["m3u8"])
                 if not self.args.no_subtitles:
@@ -173,11 +170,12 @@ class AniWatchExtractor:
                         self.captured_subtitle_urls.append(media_requests["vtt"])
             except KeyboardInterrupt:
                 print("\n\nCanceling media capture...")
-                if not get_conformation(
-                    "Would you like to download link capture up to now? (y/n): "
-                ):
+                if not get_conformation("Would you like to download episodes captured so far? (y/n): "):
                     self.driver.quit()
                     return
+                break
+
+            self.download_streams(anime, [episode])  # download immediately
 
         self.driver.quit()
         print()
@@ -204,17 +202,35 @@ class AniWatchExtractor:
             if not episode.get("m3u8"):
                 print(f"Skipping {name} (No M3U8 Stream Found)")
                 continue
+            
+            if episode.get("m3u8_content"):
+                base_url = episode["m3u8"].rsplit("/", 1)[0] + "/"
+                segments = episode.get("segments", {})
+                seg_dir = tempfile.mkdtemp()
+                fixed_lines = []
+                for line in episode["m3u8_content"].splitlines():
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        abs_url = stripped if stripped.startswith("http") else base_url + stripped
+                        if abs_url in segments:
+                            seg_path = os.path.join(seg_dir, os.path.basename(abs_url.split("?")[0]))
+                            with open(seg_path, "wb") as f:
+                                f.write(segments[abs_url])
+                            line = "file:///" + seg_path.replace("\\", "/")
+                        else:
+                            line = abs_url
+                    fixed_lines.append(line)
+                
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".m3u8", mode="w", encoding="utf-8")
+                tmp.write("\n".join(fixed_lines))
+                tmp.close()
+                variant_url = "file:///" + tmp.name.replace("\\", "/")
+            
+                result = self.yt_dlp_download(variant_url, episode["headers"], f"{folder}{name}.mp4")
+            
+            if episode.get("m3u8_content") and os.path.exists(variant_url):
+                os.unlink(variant_url)
 
-            variant_url = self.look_for_variants(episode["m3u8"], episode["headers"])
-            if not variant_url:
-                print(f"{Fore.LIGHTRED_EX}Skipping {name} (No variant stream found in master.m3u8)")
-                continue
-
-            result = self.yt_dlp_download(
-                variant_url,
-                episode["headers"],
-                f"{folder}{name}.mp4",
-            )
             if not result:
                 break
 
@@ -428,15 +444,30 @@ class AniWatchExtractor:
 
                 if (
                     not found_m3u8
-                    and uri.endswith(".m3u8")
-                    and "master" in uri
+                    and ".m3u8" in uri
+                    and "master" not in uri
+                    and "iframe" not in uri
                     and uri not in self.captured_video_urls
                 ):
-                    urls["m3u8"] = uri
-                    urls["headers"] = dict(request.headers)
-                    found_m3u8 = True
+                    try:
+                        content = request.response.body.decode("utf-8", errors="replace")
+                        if "#EXTINF" in content:
+                            urls["m3u8"] = uri
+                            urls["headers"] = dict(request.headers)
+                            urls["m3u8_content"] = content
+                            # Capture any segments already fetched by the browser
+                            urls["segments"] = {}
+                            for seg_req in list(self.driver.requests):
+                                if seg_req.response and ".ts" in seg_req.url.lower():
+                                    try:
+                                        urls["segments"][seg_req.url] = seg_req.response.body
+                                    except Exception:
+                                        pass
+                            found_m3u8 = True
+                    except Exception:
+                        pass
                     continue
-
+            
                 if (
                     not found_vtt
                     and ".vtt" in uri
@@ -502,23 +533,9 @@ class AniWatchExtractor:
 
         return urls
 
-    @staticmethod
-    def look_for_variants(m3u8_url: str, m3u8_headers: dict[str, Any]) -> str:
-        response = requests.get(m3u8_url, headers=m3u8_headers)
-        lines = response.text.splitlines()
-        url = None
-        for line in lines:
-            if line.strip().endswith(".m3u8") and "iframe" not in line:
-                url = urljoin(m3u8_url, line.strip())
-                break
-        if not url:
-            print("No valid video variant found in master.m3u8")
-            return ""
-
-        return url
-
     def yt_dlp_download(self, url: str, headers: dict[str, str], location: str) -> bool:
         yt_dlp_options: dict[str, Any] = {
+            "enable_file_urls": True,
             "no_warnings": False,
             "quiet": False,
             "outtmpl": location,
