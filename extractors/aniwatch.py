@@ -179,7 +179,6 @@ class AniWatchExtractor:
 
         self.driver.quit()
         print()
-        self.download_streams(anime, episode_list)
 
     def download_streams(self, anime: Anime, episodes: list[dict[str, Any]]):
         folder = (
@@ -195,45 +194,61 @@ class AniWatchExtractor:
             f"{folder}{anime.name} (Season {anime.season_number}).json", "w"
         ) as json_file:
             json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
-
+    
         for episode in episodes:
             name = f"{anime.name} - s{anime.season_number:02}e{episode['number']:02} - {episode['title']}"
-
+    
             if not episode.get("m3u8"):
                 print(f"Skipping {name} (No M3U8 Stream Found)")
                 continue
-            
+    
+            variant_url = episode["m3u8"]
             if episode.get("m3u8_content"):
                 base_url = episode["m3u8"].rsplit("/", 1)[0] + "/"
-                segments = episode.get("segments", {})
-                seg_dir = tempfile.mkdtemp()
-                fixed_lines = []
-                for line in episode["m3u8_content"].splitlines():
-                    stripped = line.strip()
-                    if stripped and not stripped.startswith("#"):
-                        abs_url = stripped if stripped.startswith("http") else base_url + stripped
-                        if abs_url in segments:
-                            seg_path = os.path.join(seg_dir, os.path.basename(abs_url.split("?")[0]))
-                            with open(seg_path, "wb") as f:
-                                f.write(segments[abs_url])
-                            line = "file:///" + seg_path.replace("\\", "/")
-                        else:
-                            line = abs_url
-                    fixed_lines.append(line)
-                
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".m3u8", mode="w", encoding="utf-8")
-                tmp.write("\n".join(fixed_lines))
-                tmp.close()
-                variant_url = "file:///" + tmp.name.replace("\\", "/")
-            
-                result = self.yt_dlp_download(variant_url, episode["headers"], f"{folder}{name}.mp4")
-            
-            if episode.get("m3u8_content") and os.path.exists(variant_url):
-                os.unlink(variant_url)
-
+    
+                if episode.get("variants"):
+                    # Master playlist — rewrite variants to local files
+                    local_variants = {}
+                    for v_url, v_content in episode["variants"].items():
+                        v_base = v_url.rsplit("/", 1)[0] + "/"
+                        fixed = []
+                        for line in v_content.splitlines():
+                            s = line.strip()
+                            if s and not s.startswith("#"):
+                                line = s if s.startswith("http") else v_base + s
+                            fixed.append(line)
+                        tmp_v = tempfile.NamedTemporaryFile(delete=False, suffix=".m3u8", mode="w", encoding="utf-8")
+                        tmp_v.write("\n".join(fixed))
+                        tmp_v.close()
+                        local_variants[v_url] = "file:///" + tmp_v.name.replace("\\", "/")
+    
+                    fixed_master = []
+                    for line in episode["m3u8_content"].splitlines():
+                        s = line.strip()
+                        if s and not s.startswith("#"):
+                            abs_url = s if s.startswith("http") else base_url + s
+                            line = local_variants.get(abs_url, abs_url)
+                        fixed_master.append(line)
+                    content = "\n".join(fixed_master)
+                else:
+                    # Direct media playlist — just fix segment URLs
+                    fixed = []
+                    for line in episode["m3u8_content"].splitlines():
+                        s = line.strip()
+                        if s and not s.startswith("#"):
+                            line = s if s.startswith("http") else base_url + s
+                        fixed.append(line)
+                    content = "\n".join(fixed)
+    
+                tmp_m = tempfile.NamedTemporaryFile(delete=False, suffix=".m3u8", mode="w", encoding="utf-8")
+                tmp_m.write(content)
+                tmp_m.close()
+                variant_url = "file:///" + tmp_m.name.replace("\\", "/")
+    
+            result = self.yt_dlp_download(variant_url, episode["headers"], f"{folder}{name}.mp4")
             if not result:
                 break
-
+    
             if "vtt" in episode and episode["vtt"]:
                 self._download_vtt(
                     episode["vtt"],
@@ -445,25 +460,38 @@ class AniWatchExtractor:
                 if (
                     not found_m3u8
                     and ".m3u8" in uri
-                    and "master" not in uri
                     and "iframe" not in uri
                     and uri not in self.captured_video_urls
                 ):
                     try:
                         content = request.response.body.decode("utf-8", errors="replace")
-                        if "#EXTINF" in content:
+                        if "#EXT-X-STREAM-INF" in content:  # master playlist
                             urls["m3u8"] = uri
                             urls["headers"] = dict(request.headers)
                             urls["m3u8_content"] = content
-                            # Capture any segments already fetched by the browser
-                            urls["segments"] = {}
-                            for seg_req in list(self.driver.requests):
-                                if seg_req.response and ".ts" in seg_req.url.lower():
-                                    try:
-                                        urls["segments"][seg_req.url] = seg_req.response.body
-                                    except Exception:
-                                        pass
+                            urls["variants"] = {}
                             found_m3u8 = True
+                        elif "#EXTINF" in content and not found_m3u8:  # direct media playlist, no master
+                            urls["m3u8"] = uri
+                            urls["headers"] = dict(request.headers)
+                            urls["m3u8_content"] = content
+                            urls["variants"] = {}
+                            found_m3u8 = True
+                    except Exception:
+                        pass
+                    continue
+
+                # Capture variant m3u8s
+                if (
+                    found_m3u8
+                    and ".m3u8" in uri
+                    and "master" not in uri
+                    and "iframe" not in uri
+                ):
+                    try:
+                        content = request.response.body.decode("utf-8", errors="replace")
+                        if "#EXTINF" in content:
+                            urls["variants"][uri] = content
                     except Exception:
                         pass
                     continue
@@ -539,7 +567,7 @@ class AniWatchExtractor:
             "no_warnings": False,
             "quiet": False,
             "outtmpl": location,
-            "format": "best",
+            "format": "bestvideo+bestaudio/best",
             "http_headers": headers,
             "logger": YTDLogger(),
             "fragment_retries": 10,  # Retry up to 10 times for failed fragments
