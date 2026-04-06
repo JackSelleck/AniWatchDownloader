@@ -1,6 +1,12 @@
-Forked from Gavin Heatheringtons HiAnimeDownloader, HiAnime is no longer up so ive edited his scripts to use on AniWatch instead; note that I have never used python and dont know how yt-dlp works so you may encounter issues, though some animes just have badly configured .vtt files which are not really the fault of the tool.
+Forked from Gavin Heatheringtons HiAnimeDownloader, HiAnime is no longer up so ive edited his scripts to use on AniWatch instead; note that I have never used python and dont know how yt-dlp works so you may encounter issues, though some animes just have badly configured .vtt files which might not be the fault of the tool.
 
-Below is the ReadMe file which I have mostly kept the same from HiAnimeDownloader.
+By default I recommend using VidSrc as the server to download from, I also recommend turning off your vpn if you use a free one.
+
+If the downloader is failing you, try another server, and try occasionally tabbing into the browser window, in rare circumstances you may want to try restarting the browser window
+
+If you would like to leave a bug report, I request that you include the anime and season the problem occurred on
+
+Below is the ReadMe file which I have mostly kept the same from HiAnimeDownloader, it has a setup guide you will likely need.
 
 # GDownloader
 

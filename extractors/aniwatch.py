@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import tempfile
+import psutil
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from glob import glob
@@ -17,6 +18,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium_stealth import stealth
 from seleniumwire import webdriver
 from yt_dlp import YoutubeDL
@@ -69,6 +71,32 @@ class AniWatchExtractor:
             "", "", "".join(self.BAD_TITLE_CHARS)
         )
 
+    def _reselect_server(self, anime: Anime) -> bool:
+        """Re-click the chosen server button. Returns True on success, False on failure."""
+        try:
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.ID, "servers-content"))
+            )
+            time.sleep(1)
+            options = self.get_server_options(anime.download_type)
+            for option in options:
+                try:
+                    if option.text == self._selected_server:
+                        option.click()
+                        time.sleep(2)
+                        return True
+                except Exception:
+                    options = self.get_server_options(anime.download_type)
+                    for opt in options:
+                        if opt.text == self._selected_server:
+                            opt.click()
+                            time.sleep(2)
+                            return True
+        except Exception as e:
+            print(f"{Fore.LIGHTYELLOW_EX}Warning: could not re-select server ({e}), restarting driver...")
+            return False
+        return False
+
     def run(self):
         anime: Anime | None = (  # type: ignore
             self.get_anime_from_link(self.link)
@@ -98,7 +126,11 @@ class AniWatchExtractor:
         )
 
         if anime.sub_episodes != 0 and anime.dub_episodes != 0:
-            anime.download_type = self.get_download_type()
+            if self.args.quick:
+                anime.download_type = "sub"
+                print("Quick mode: defaulting to sub")
+            else:
+                anime.download_type = self.get_download_type()
         elif anime.dub_episodes == 0:
             print("Dub episodes are not available. Defaulting to sub.")
             anime.download_type = "sub"
@@ -107,24 +139,29 @@ class AniWatchExtractor:
             anime.download_type = "dub"
 
         number_of_episodes = getattr(anime, f"{anime.download_type}_episodes")
-        if number_of_episodes != 1:
-            start_ep = get_int_in_range(
-                f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
-                1,
-                number_of_episodes,
-            )
-            end_ep = get_int_in_range(
-                f"{Fore.LIGHTCYAN_EX}Enter the ending episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
-                1,
-                number_of_episodes,
-            )
-        else:
+        if self.args.quick:
             start_ep = 1
-            end_ep = 1
+            end_ep = number_of_episodes
+            print(f"{Fore.LIGHTCYAN_EX}Quick mode: downloading all {number_of_episodes} episodes")
+        else:
+            if number_of_episodes != 1:
+                start_ep = get_int_in_range(
+                    f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
+                    1,
+                    number_of_episodes,
+                )
+                end_ep = get_int_in_range(
+                    f"{Fore.LIGHTCYAN_EX}Enter the ending episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
+                    1,
+                    number_of_episodes,
+                )
+            else:
+                start_ep = 1
+                end_ep = 1
 
-        anime.season_number = get_int_in_range(
-            f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
-        )
+            anime.season_number = get_int_in_range(
+                f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
+            )
 
         self.configure_driver()
         self.driver.get(anime.url)
@@ -145,6 +182,7 @@ class AniWatchExtractor:
 
         self.captured_video_urls = []
         self.captured_subtitle_urls = []
+
         for episode in episode_list:
             url = episode["url"]
             number = episode["number"]
@@ -156,10 +194,33 @@ class AniWatchExtractor:
             )
 
             try:
-                self.driver.requests.clear()
-                self.driver.get(url)
+                try:
+                    self._kill_driver()
+                except Exception:
+                    pass
+                self.configure_driver()
+                try:
+                    self.driver.get(url)
+                except (TimeoutException, WebDriverException):
+                    print(f"\n{Fore.LIGHTYELLOW_EX}Page load timed out, retrying with fresh driver...")
+                    try:
+                        self._kill_driver()
+                    except Exception:
+                        pass
+                    self.configure_driver()
+                    self.driver.get(url)
+
+                if not self._reselect_server(anime):
+                    try:
+                        self._kill_driver()
+                    except Exception:
+                        pass
+                    self.configure_driver()
+                    self.driver.get(url)
+                    self._reselect_server(anime)
                 self.driver.execute_script("window.focus();")
-                media_requests = self.capture_media_requests()
+
+                media_requests = self.capture_media_requests(anime, url)
                 if not media_requests:
                     print("No m3u8 file was found, skipping download")
                     continue
@@ -171,14 +232,49 @@ class AniWatchExtractor:
             except KeyboardInterrupt:
                 print("\n\nCanceling media capture...")
                 if not get_conformation("Would you like to download episodes captured so far? (y/n): "):
-                    self.driver.quit()
+                    try:
+                        self._kill_driver()
+                    except Exception:
+                        pass
                     return
                 break
 
-            self.download_streams(anime, [episode])  # download immediately
+            self.download_streams(anime, [episode])
 
-        self.driver.quit()
+        try:
+            self._kill_driver()
+        except Exception:
+            pass
         print()
+
+    def _kill_driver(self) -> None:
+        # Collect all PIDs to kill before quit() closes our handles
+        pids_to_kill = set()
+        for attr in ('_driver_pid', '_browser_pid'):
+            pid = getattr(self, attr, None)
+            if pid:
+                pids_to_kill.add(pid)
+                try:
+                    for child in psutil.Process(pid).children(recursive=True):
+                        pids_to_kill.add(child.pid)
+                except psutil.NoSuchProcess:
+                    pass
+
+        try:
+            self.driver.quit()
+        except Exception:
+            pass
+
+        time.sleep(0.5)  # Let quit() flush before force-killing
+
+        for pid in pids_to_kill:
+            try:
+                psutil.Process(pid).kill()
+            except psutil.NoSuchProcess:
+                pass
+
+        if hasattr(self, 'driver'):
+            del self.driver
 
     def download_streams(self, anime: Anime, episodes: list[dict[str, Any]]):
         folder = (
@@ -189,23 +285,28 @@ class AniWatchExtractor:
         )
         os.makedirs(folder, exist_ok=True)
 
-        # Write to JSON file
-        with open(
-            f"{folder}{anime.name} (Season {anime.season_number}).json", "w"
-        ) as json_file:
+        json_filename = (
+            f"{anime.name} (Season {anime.season_number}).json"
+            if anime.season_number >= 0
+            else f"{anime.name}.json"
+        )
+        with open(f"{folder}{json_filename}", "w") as json_file:
             json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
-    
+
         for episode in episodes:
-            name = f"{anime.name} - s{anime.season_number:02}e{episode['number']:02} - {episode['title']}"
-    
+            if anime.season_number >= 0:
+                name = f"{anime.name} - s{anime.season_number:02}e{episode['number']:02} - {episode['title']}"
+            else:
+                name = f"{anime.name} - e{episode['number']:02} - {episode['title']}"
+
             if not episode.get("m3u8"):
                 print(f"Skipping {name} (No M3U8 Stream Found)")
                 continue
-    
+
             variant_url = episode["m3u8"]
             if episode.get("m3u8_content"):
                 base_url = episode["m3u8"].rsplit("/", 1)[0] + "/"
-    
+
                 if episode.get("variants"):
                     # Master playlist — rewrite variants to local files
                     local_variants = {}
@@ -221,7 +322,7 @@ class AniWatchExtractor:
                         tmp_v.write("\n".join(fixed))
                         tmp_v.close()
                         local_variants[v_url] = "file:///" + tmp_v.name.replace("\\", "/")
-    
+
                     fixed_master = []
                     for line in episode["m3u8_content"].splitlines():
                         s = line.strip()
@@ -239,16 +340,24 @@ class AniWatchExtractor:
                             line = s if s.startswith("http") else base_url + s
                         fixed.append(line)
                     content = "\n".join(fixed)
-    
+
                 tmp_m = tempfile.NamedTemporaryFile(delete=False, suffix=".m3u8", mode="w", encoding="utf-8")
                 tmp_m.write(content)
                 tmp_m.close()
                 variant_url = "file:///" + tmp_m.name.replace("\\", "/")
-    
+
             result = self.yt_dlp_download(variant_url, episode["headers"], f"{folder}{name}.mp4")
+
+            # Clean up temp file using the direct path
+            if episode.get("m3u8_content"):
+                try:
+                    os.unlink(tmp_m.name)
+                except Exception:
+                    pass
+
             if not result:
                 break
-    
+
             if "vtt" in episode and episode["vtt"]:
                 self._download_vtt(
                     episode["vtt"],
@@ -257,9 +366,9 @@ class AniWatchExtractor:
                     referer=episode.get("url", self.URL),
                 )
             elif not self.args.no_subtitles:
-                print(f"Skipping {name}.vtt (No VTT Stream Found)")
-            # except Exception as e:
-            #     print(f"\n\nError while downloading {name}: \n\n{e}")
+                print(f"Skipping {name}.vtt (No VTT Stream Found)")            
+                # except Exception as e:
+                # print(f"\n\nError while downloading {name}: \n\n{e}")
 
     @staticmethod
     def get_download_type():
@@ -280,6 +389,9 @@ class AniWatchExtractor:
         return AniWatchExtractor.get_download_type()
 
     def configure_driver(self) -> None:
+        if hasattr(self, 'driver'):
+            self._kill_driver()
+    
         mobile_emulation: dict[str, str] = {"deviceName": "iPhone X"}
 
         options: webdriver.ChromeOptions = webdriver.ChromeOptions()
@@ -291,6 +403,8 @@ class AniWatchExtractor:
         options.add_experimental_option("mobileEmulation", mobile_emulation)
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("window-size=600,1000")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--renderer-process-limit=1")
 
         # options.add_argument("--disable-popup-blocking")
         options.add_experimental_option(
@@ -321,6 +435,20 @@ class AniWatchExtractor:
             options=options,
             seleniumwire_options=seleniumwire_options,
         )
+        self._driver_pid = self.driver.service.process.pid 
+        try:
+            self._browser_pid = self.driver.browser_pid
+        except AttributeError:
+            try:
+                children = psutil.Process(self._driver_pid).children(recursive=True)
+                # Store all child PIDs, not just children[0]
+                self._browser_pids = [c.pid for c in children]
+                self._browser_pid = self._browser_pids[0] if self._browser_pids else None
+            except Exception:
+                self._browser_pid = None
+
+        self.driver.set_page_load_timeout(60)
+        self.driver.set_script_timeout(30)
 
         stealth(
             self.driver,
@@ -385,7 +513,7 @@ class AniWatchExtractor:
                 print(f"{Fore.LIGHTRED_EX} {i + 1}: {Fore.LIGHTCYAN_EX}{option.text}")
 
             self.driver.requests.clear()
-            self.driver.quit()
+            self._kill_driver()
 
             selection = server_names[
                 get_int_in_range(
@@ -397,7 +525,7 @@ class AniWatchExtractor:
             ]
         else:
             self.driver.requests.clear()
-            self.driver.quit()
+            self._kill_driver()
 
         print(f"\n{Fore.LIGHTGREEN_EX}You chose: {Fore.LIGHTCYAN_EX}{selection}")
 
@@ -406,6 +534,7 @@ class AniWatchExtractor:
 
         options = self.get_server_options(anime.download_type)
 
+        self._selected_server = selection
         for option in options:
             if option.text == selection:
                 return option
@@ -435,43 +564,44 @@ class AniWatchExtractor:
                 })
         return episodes
 
-    def capture_media_requests(self) -> dict[str, str] | None:
+    def capture_media_requests(self, anime: Anime, episode_url: str) -> dict[str, str] | None:
+        current_episode_url = episode_url
         found_m3u8: bool = False
+        found_master: bool = False
         found_vtt: bool = self.args.no_subtitles
         attempt: int = 0
         urls: dict[str, Any] = {"all-vtt": []}
         checked_uris: set[str] = set()
 
-        all_urls = []
+        all_urls: set[str] = set()  # changed from list to set
         while (not found_m3u8 or not found_vtt) and self.DOWNLOAD_ATTEMPT_CAP >= attempt:
-            sys.stdout.write(
-                f"\r{Fore.CYAN}Attempt #{attempt} - {self.DOWNLOAD_ATTEMPT_CAP - attempt} Attempts Remaining"
-            )
+            line = f"Attempt #{attempt} - {self.DOWNLOAD_ATTEMPT_CAP - attempt} Attempts Remaining"
+            sys.stdout.write(f"\r{Fore.CYAN}{line:<50}")
             sys.stdout.flush()
 
             for request in list(self.driver.requests):
                 if not request.response:
                     continue
-
+                
                 uri = request.url.lower()
-                if uri not in all_urls:
-                    all_urls.append(uri)
+                all_urls.add(uri)  # set.add instead of list append + check
 
                 if (
-                    not found_m3u8
+                    not found_master
                     and ".m3u8" in uri
                     and "iframe" not in uri
                     and uri not in self.captured_video_urls
                 ):
                     try:
                         content = request.response.body.decode("utf-8", errors="replace")
-                        if "#EXT-X-STREAM-INF" in content:  # master playlist
+                        if "#EXT-X-STREAM-INF" in content:
                             urls["m3u8"] = uri
                             urls["headers"] = dict(request.headers)
                             urls["m3u8_content"] = content
                             urls["variants"] = {}
                             found_m3u8 = True
-                        elif "#EXTINF" in content and not found_m3u8:  # direct media playlist, no master
+                            found_master = True
+                        elif "#EXTINF" in content and not found_m3u8:
                             urls["m3u8"] = uri
                             urls["headers"] = dict(request.headers)
                             urls["m3u8_content"] = content
@@ -480,8 +610,7 @@ class AniWatchExtractor:
                     except Exception:
                         pass
                     continue
-
-                # Capture variant m3u8s
+                
                 if (
                     found_m3u8
                     and ".m3u8" in uri
@@ -495,7 +624,7 @@ class AniWatchExtractor:
                     except Exception:
                         pass
                     continue
-            
+                
                 if (
                     not found_vtt
                     and ".vtt" in uri
@@ -512,21 +641,39 @@ class AniWatchExtractor:
                         )
                     except Exception:
                         continue
-
+                    
                     if lang != self.SUBTITLE_LANG:
                         continue
-
+                    
                     urls["all-vtt"].append(uri)
-                    found_vtt = True  # stop as soon as one valid English VTT is found
+                    found_vtt = True
 
+                # Exit the request loop early once we have everything
+                if found_m3u8 and found_vtt:
+                    break
+                
+            self.driver.requests.clear()
             attempt += 1
             if attempt in self.DOWNLOAD_REFRESH:
+                print(f"\n{Fore.LIGHTYELLOW_EX}Attempt {attempt}: restarting driver...")
                 try:
-                    self.driver.requests.clear()
-                    self.driver.refresh()
-                except Exception as e:
-                    print(f"\n{Fore.LIGHTYELLOW_EX}Warning: page refresh failed ({e}), continuing...")
-            time.sleep(1)
+                    self._kill_driver()
+                except Exception:
+                    pass
+                self.configure_driver()
+                try:
+                    self.driver.get(current_episode_url)
+                except (TimeoutException, WebDriverException):
+                    print(f"\n{Fore.LIGHTYELLOW_EX}Page load timed out on restart, retrying...")
+                    try:
+                        self._kill_driver()
+                    except Exception:
+                        pass
+                    self.configure_driver()
+                    self.driver.get(current_episode_url)
+                self._reselect_server(anime)
+
+            time.sleep(0.5)
 
         print()
         if not found_m3u8:

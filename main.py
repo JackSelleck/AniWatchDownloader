@@ -24,6 +24,9 @@ class Main:
             if "http" in ans.lower():
                 self.args.link = ans
             else:
+                if not self.args.quick:
+                    quick = input(f"{Fore.LIGHTCYAN_EX}Use quick mode? (sub, all episodes, no season specification) (y/n): {Fore.LIGHTYELLOW_EX}").strip().lower()
+                    self.args.quick = quick in ("y", "yes")
                 return AniWatchExtractor(args=self.args, name=ans)
 
         if not self.args.link and self.args.filename:
@@ -35,6 +38,13 @@ class Main:
 
     def parse_args(self):
         parser = argparse.ArgumentParser(description="Anime downloader options")
+
+        parser.add_argument(
+        "--quick",
+        action="store_true",
+        default=False,
+        help="Skip setup prompts and use defaults: dub, all episodes, season 1",
+    )
 
         parser.add_argument(
             "--no-subtitles",

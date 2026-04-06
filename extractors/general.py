@@ -40,4 +40,7 @@ class GeneralExtractor:
             yt_dlp_options["cookies"] = "cookies.txt"
 
         with YoutubeDL(yt_dlp_options) as ydl:
-            ydl.download([url])
+            try:
+                ydl.download([url])
+            except KeyboardInterrupt:
+                print("\nDownload cancelled.")
